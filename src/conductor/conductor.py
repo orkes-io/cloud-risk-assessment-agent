@@ -1,5 +1,4 @@
 import os
-import asyncio
 
 from typing import Dict
 
@@ -79,7 +78,7 @@ def query_summary_from_db(category:str):
     app_context = setup_database_connections()
 
     # Query database for summary data
-    summary_df, table_df = asyncio.run(query_summary(app_context.get_connection(), category))
+    summary_df, table_df = query_summary(app_context.get_connection(), category)
     
     result = table_df.to_string(index=False)
     top5 = table_df.to_string()
