@@ -42,14 +42,16 @@ async def on_message(msg: cl.Message):
     
     output = conductor.executeWorkflow("Cloud-Risk-Assessment-Agent", 1, {"query": msg.content})
     
-    [result, insight, conclusion] = output["final_answer"].split(" + ")
+    [summary, result, insight, conclusion] = output["final_answer"].split(" + ")
 
-    df = pd.read_csv(StringIO(result))
-    elements = [cl.Dataframe(data=df, display="inline", name="Dataframe")]
-    await cl.Message(content="Report Table:", elements=elements).send()
+    await query_result.stream_token(summary)
+    await query_result.stream_token("\n\n")
 
-    await query_result.stream_token(AIMessage(content=insight).content)
-    await query_result.stream_token(AIMessage(content=conclusion).content)
+    #await query_result.stream_token(result)
+
+    await query_result.stream_token(insight)
+    await query_result.stream_token("\n\n")
+    #await query_result.stream_token(conclusion)
 
     await query_result.send()
 
