@@ -1,1 +1,7 @@
 sqlite/chainlit.db
+
+# Ignore startup scripts
+*.sh
+
+# Ignore pyc files
+*.pyc

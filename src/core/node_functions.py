@@ -11,6 +11,7 @@ from src.utils.utils import token_count, read_prompt, read_file_prompt, messages
 from src.db.db_query import generate_query, is_valid_query, query_summary
 from src.core.agent_state import AgentState
 from src.db.db_setup import setup_database_connections
+from src.conductor.workers import classify_query, generate_summary, create_insights, write_conclusion, execute_ai_query, explain_yourself
 
 
 app_context = setup_database_connections()
@@ -34,113 +35,25 @@ async def classify_user_intent(state: AgentState) -> Command:
     query = get_latest_human_message(messages)
     print(f"\n\nUSER QUERY: {query} \n")
     
-    try:
-        # Try to parse as a report command
-        category = parse_report_command(query)
-        return Command(
-            update={"category": category},
-            goto="summary"
-        )
-    except ValueError:
-        # Process as a regular question
-        content = reasoning_prompt(
-            "./src/prompts/intent_classification_prompt.txt", 
-            question=query
-        )
-        intent_response = await model.ainvoke([HumanMessage(content=content)])
-        
-        try:
-            res = json.loads(intent_response.content)
-            score = res.get("Score", 0)
-            
-            if score > 30:
-                return Command(
-                    update={"intention": res, "user_query": query},
-                    goto="querydb"
-                )
-            else:
-                return Command(
-                    update={"intention": res, "user_query": None},
-                    goto="reason"
-                )
-        except json.JSONDecodeError:
-            # Handle invalid JSON response
-            print("Failed to parse intent classification response")
-            return Command(
-                update={"user_query": query},
-                goto="reason"
-            )
+    [data, destination] = classify_query(query)
+    return Command(
+        update=data,
+        goto=destination
+    )
         
 async def generate_summary_report(state: AgentState) -> object:
     """Generate a summary report based on the specified category"""
     print("--------------do_summary---------------")
     category = state["category"]
 
-    # Query database for summary data
-    summary_df, details_df = await query_summary(app_context.get_connection(), category)
-    
-    # Convert results to string format
-    result = details_df.to_string(index=False)
-    top5_result = details_df.to_string()
-    summary = summary_df.to_string(index=False)
-
-    # Format prompt for the model
-    template = read_prompt("summary")
-    prompt = PromptTemplate(
-        template=template,
-        input_variables=["category", "summary", "result"]
-    )
-    formatted_prompt = prompt.format(
-        category=category, 
-        summary=summary, 
-        result=result
-    )
-    
-    # Create messages for the model
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=formatted_prompt)
-    ]
-
-    # Log token usage
-    tokens = token_count(formatted_prompt)
-    print(f"Token used: {tokens}\n")
-
-    # Get response from the model
-    response = await final_model.ainvoke(messages)
-
-    # Store results in state
-    df_str = details_df.to_csv(index=False)
-    return {
-        "dataframe": df_str, 
-        "result_text": result, 
-        "top5": top5_result, 
-        "messages": [response]
-    }
+    return generate_summary(category)
 
 async def generate_insights(state: AgentState) -> object:
     """Generate insights based on the top 5 results"""
     print("--------------do_insight---------------")
     result = state["top5"]
 
-    # Format prompt for insights
-    template = read_prompt("insight")
-    prompt = PromptTemplate(
-        template=template,
-        input_variables=["result"]
-    )
-    formatted_prompt = prompt.format(result=result)
-    
-    # Create messages for the model
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=formatted_prompt)
-    ]
-    
-    # Get response from the model
-    response = await final_model.ainvoke(messages)
-
-    return {"messages": [response]}
+    return create_insights(result)
 
 async def finalize_conclusion(state: AgentState) -> object:
     """Generate a conclusion based on the full results"""
@@ -148,18 +61,7 @@ async def finalize_conclusion(state: AgentState) -> object:
     messages = state["messages"]
     result = state["result_text"]
 
-    # Add conclusion prompt to messages
-    template = read_prompt("conclude")
-    messages.append(HumanMessage(content=template))
-    
-    # Log token usage
-    total_tokens = messages_token_count(messages)
-    print(f"total message tokens: {total_tokens}")
-    
-    # Get response from the model
-    response = await final_model.ainvoke(messages)
-    
-    return {"messages": [HumanMessage(content=result), response]}
+    return write_conclusion(messages, result)
 
 async def execute_db_query(state: AgentState) -> Command[Literal["reason"]]:
     """
@@ -171,48 +73,12 @@ async def execute_db_query(state: AgentState) -> Command[Literal["reason"]]:
     # Determine category if available
     category = state.get("category", "ALL").upper() if state.get("category") else "ALL"
 
-    try:
-        # Generate a database query using the model
-        generated_query = await generate_query(user_query, category, model)
-
-        # Validate the generated query
-        if not is_valid_query(generated_query, app_context.get_engine()):
-            print("Generated query is invalid or potentially unsafe.\n\n")
-            return Command(
-                update={"user_query": user_query},
-                goto="reason"
-            )
-
-        # Execute the validated query
-        print("Executing query...\n\n")
-        cursor = app_context.get_connection().cursor()
-        cursor.execute(generated_query)
-        records = cursor.fetchall()
-
-        # Prepare query results
-        if records:
-            columns = [desc[0] for desc in cursor.description]
-            results_str = "\n".join(str(dict(zip(columns, row))) for row in records)
-        else:
-            results_str = "No results returned."
-
-        print("Query results prepared.\n\n")
-        return Command(
-            update={
-                "user_query": user_query, 
-                "sql_query": generated_query, 
-                "query_results": results_str, 
-                "messages": messages + [SystemMessage(content="Query executed successfully.")]
-            },
-            goto="reason"
-        )
-
-    except Exception as e:
-        print(f"Error during query execution: {e}\n\n")
-        return Command(
-            update={"user_query": user_query},
-            goto="reason"
-        )
+    data = execute_ai_query(messages, user_query, category)
+    
+    return Command(
+        update=data,
+        goto="reason"
+    )
 
 async def provide_explanation(state: AgentState) -> Command:
     """
@@ -227,32 +93,12 @@ async def provide_explanation(state: AgentState) -> Command:
         if not user_query:
             user_query = get_latest_human_message(state["messages"])
 
-        # Format the explanation prompt
-        template = read_prompt("explanation")
-        prompt = PromptTemplate(
-            template=template,
-            input_variables=["question", "sql_query", "scan_results"]
-        )
-        formatted_prompt = prompt.format(
-            question=user_query, 
-            sql_query=sql_query, 
-            scan_results=query_results
-        )
-        
-        # Limit prompt size to prevent token overflow
-        if len(formatted_prompt) > 80000:
-            formatted_prompt = formatted_prompt[:80000]
-
-        # Get response from the model
-        explanation_response = await model.ainvoke([HumanMessage(content=formatted_prompt)])
-        
-        # Clear state for next interaction
         return Command(
             update={
                 "user_query": None,
                 "sql_query": None,
                 "query_results": None,
-                "messages": state["messages"] + [explanation_response]
+                "messages": state["messages"] + [explain_yourself(user_query, sql_query, query_results)]
             }
         )
 
