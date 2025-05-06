@@ -15,6 +15,7 @@ import chainlit as cl # type: ignore
 from src.core.agent_state import AgentState
 from src.core.node_functions import classify_user_intent, execute_db_query, generate_summary_report, generate_insights, finalize_conclusion, provide_explanation
 from src.db.db_setup import setup_database_connections
+from src.conductor.conductor import ConductorManager
 
 # Custom API
 from fastapi import HTTPException, Response, APIRouter # type: ignore
@@ -156,6 +157,8 @@ async def on_chat_resume(thread):
             state["messages"] = state_messages
             graph.update_state(config, state)
 
+#Start workers
+conductor = ConductorManager()
 
 cust_router = APIRouter()
 app_context = setup_database_connections()
