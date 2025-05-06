@@ -1,13 +1,6 @@
-import sqlite3
-import os
-import re
-from langchain_openai import ChatOpenAI
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain_core.messages import HumanMessage
-from langchain.prompts import PromptTemplate
-import asyncio
 import sqlparse
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 import pandas as pd
 from src.utils.utils import reasoning_prompt
 
@@ -54,7 +47,7 @@ def limit_string_length(resource_string, max_length=200):
         result += new_part
     return result
 
-async def query_summary(conn, cate: str):
+def query_summary(conn, cate: str):
     category = cate.upper()
     if category not in ["CODE", "KUBERNETES", "AWS", "CONTAINER", "ALL"]:
         return None, None
