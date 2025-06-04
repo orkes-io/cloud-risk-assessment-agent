@@ -1,6 +1,7 @@
 import json
 from langchain_core.prompts import PromptTemplate # type: ignore
 from langchain_core.messages import HumanMessage, SystemMessage # type: ignore
+from conductor.client.worker.worker_task import worker_task #type: ignore
 from src.utils.utils import read_prompt, read_file_prompt, load_chat_model, reasoning_prompt, parse_report_command
 from src.db.db_setup import setup_database_connections
 from src.db.db_query import query_summary, is_valid_query, generate_query
@@ -15,6 +16,7 @@ SYSTEM_PROMPT = read_file_prompt("./src/prompts/report_system_prompt.txt")
 
 app_context = setup_database_connections()
 
+@worker_task(task_definition_name='Classify_Query')
 def classify_query(query: str) -> tuple[object, str]:
     """
     Classify the user's query as either a report request or a regular question.
@@ -45,7 +47,8 @@ def classify_query(query: str) -> tuple[object, str]:
             print("Failed to parse intent classification response")
             return [{"user_query": query}, "reason"];
 
-def generate_summary(category) -> object:
+@worker_task(task_definition_name='Generate_Summary')
+def generate_summary(category: str) -> object:
     """Generate a summary report based on the specified category"""
     print("--------------do_summary---------------")
 
@@ -87,6 +90,7 @@ def generate_summary(category) -> object:
         "messages": [response]
     }
 
+@worker_task(task_definition_name='Create_Insights')
 def create_insights(top5: object) -> object:
     """Generate insights based on the top 5 results"""
     print("--------------do_insight---------------")
@@ -110,6 +114,7 @@ def create_insights(top5: object) -> object:
 
     return {"messages": [response]}
 
+@worker_task(task_definition_name='Write_Conclusion')
 def write_conclusion(messages, result) -> object:
     # Add conclusion prompt to messages
     template = read_prompt("conclude")
@@ -120,6 +125,7 @@ def write_conclusion(messages, result) -> object:
     
     return {"messages": [HumanMessage(content=result), response]}
 
+@worker_task(task_definition_name='Execute_AI_Query')
 def execute_ai_query(messages, user_query: str, category: str) -> object:
     try:
         # Generate a database query using the model
@@ -154,7 +160,8 @@ def execute_ai_query(messages, user_query: str, category: str) -> object:
     except Exception as e:
         print(f"Error during query execution: {e}\n\n")
         return {"user_query": user_query}
-    
+
+@worker_task(task_definition_name='Explain_Yourself')
 def explain_yourself(user_query: str, sql_query: str = "", query_results: str ="") -> str:
         # Format the explanation prompt
         template = read_prompt("explanation")
